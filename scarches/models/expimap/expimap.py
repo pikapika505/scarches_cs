@@ -170,10 +170,15 @@ class expiMap(nn.Module, CVAELatentsModelMixin):
                                         self.dr_rate,
                                         self.n_conditions)
 
-    def forward(self, x=None, batch=None, sizefactor=None, labeled=None):
+    def forward(self, x=None, batch=None, sizefactor=None, labeled=None, input_mask=None):
         x_log = torch.log(1 + x)
+        if input_mask is not None:
+            x_log = x_log * input_mask  # Apply the mask to zero-out missing genes
+
         if self.recon_loss == 'mse':
             x_log = x
+            if input_mask is not None:
+                x_log = x * input_mask
 
         z1_mean, z1_log_var = self.encoder(x_log, batch)
         z1 = self.sampling(z1_mean, z1_log_var)
