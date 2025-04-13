@@ -248,6 +248,7 @@ class EXPIMAP(BaseMixin, SurgeryMixin, CVAELatentsMixin):
         """
         return self.model.decoder.nonzero_terms()
 
+
     def get_latent(
         self,
         x: Optional[np.ndarray] = None,
@@ -255,41 +256,49 @@ class EXPIMAP(BaseMixin, SurgeryMixin, CVAELatentsMixin):
         only_active: bool = False,
         mean: bool = False,
         mean_var: bool = False
-    ):
-        """Map `x` in to the latent space. This function will feed data in encoder
-           and return z for each sample in data.
-
-           Parameters
-           ----------
-           x
-                Numpy nd-array to be mapped to latent space. `x` has to be in shape [n_obs, input_dim].
-                If None, then `self.adata.X` is used.
-           c
-                `numpy nd-array` of original (unencoded) desired labels for each sample.
-           only_active
-                Return only the latent variables which correspond to active terms, i.e terms that
-                were not deactivated by the group lasso regularization.
-           mean
-                return mean instead of random sample from the latent space
-           mean_var
-                return mean and variance instead of random sample from the latent space
-                if `mean=False`.
-
-           Returns
-           -------
-                Returns array containing latent space encoding of 'x'.
+        ):
         """
-        result = super().get_latent(x, c, mean, mean_var)
+        Map `x` in to the latent space. This function will feed data into the encoder
+        and return z for each sample in data.
+        """
+
+        # If x is not provided, use data from AnnData
+        if x is None:
+            x = self.adata.X
+        if scipy.sparse.issparse(x):
+            x = x.toarray()
+
+        x_tensor = torch.tensor(x, dtype=torch.float32).to(self.device)
+
+        # Generate input mask (1 for present gene values, 0 for missing/zero)
+        input_mask = (x_tensor != 0).float()
+
+        # Prepare condition labels if provided
+        if c is None:
+            batch_tensor = torch.tensor(self.adata.obs[self.condition_key].cat.codes.values, dtype=torch.long).to(self.device)
+        else:
+            batch_tensor = torch.tensor(c, dtype=torch.long).to(self.device)
+
+        # Pass inputs through the model
+        with torch.no_grad():
+            z_mean, z_log_var = self.model.encoder(torch.log1p(x_tensor * input_mask), batch_tensor)
+
+            if mean:
+                z = z_mean
+            else:
+                z = self.model.sampling(z_mean, z_log_var)
+
+            if mean_var:
+                return z_mean.cpu().numpy(), torch.exp(z_log_var).cpu().numpy()
+            else:
+                result = z.cpu().numpy()
 
         if not only_active:
             return result
         else:
             active_idx = self.nonzero_terms()
-            if isinstance(result, tuple):
-                result = tuple(r[:, active_idx] for r in result)
-            else:
-                result = result[:, active_idx]
-            return result
+            return result[:, active_idx]
+
 
     def update_terms(self, terms: Union[str, list]='terms', adata=None):
         """Add extension terms' names to the terms.
